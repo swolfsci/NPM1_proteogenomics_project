@@ -1,0 +1,10 @@
+data/
+output/
+renv/library/
+renv/staging/
+renv/sandbox/
+.Rhistory
+.RData
+.Rproj.user
+*.Rproj
+.DS_Store
