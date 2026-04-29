@@ -57,9 +57,9 @@ cat("Computing mito-score...\n")
 # Load DEGs from Jayavelu, Wolf, Buettner et al. Cancer Cell 2022
 mito_degs_raw <- read_csv(file.path(data_dir, "MitovsAll.csv"), show_col_types = FALSE)
 
-# 1. DEGs: logFC > 0, adj.P.Val <= 0.1, present in our proteome
+# 1. DEGs: logFC > 0, adj.P.Val <= 0.05, present in our proteome
 degs <- mito_degs_raw %>%
-  filter(logFC > 0, adj.P.Val <= 0.1) %>%
+  filter(logFC > 0, adj.P.Val <= 0.05) %>%
   filter(PG.Genes %in% rownames(vsn)) %>%
   pull(PG.Genes)
 
