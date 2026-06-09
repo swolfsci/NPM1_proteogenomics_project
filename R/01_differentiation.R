@@ -355,7 +355,77 @@ ggsave(file.path(fig_dir, "FigS1G_gsva_by_cluster.pdf"), p_gsva_by_cluster,
        width = 10, height = 4)
 
 # =============================================================================
-# 8. Save intermediate objects
+# 8. Protein correlates of the differentiation axes (limma)
+# =============================================================================
+# Which proteins track each continuous phenotype? We regress the proteome on
+# each differentiation score and on the two diffusion components individually,
+# using the continuous score as the single covariate (this avoids the
+# arbitrariness of the discrete clustering). Saved as a supplementary table.
+
+cat("Protein-differentiation associations (limma)...\n")
+
+fit_continuous_axis <- function(expr_tbl, coef_name) {
+  tbl    <- expr_tbl %>% filter(bio_id_merge %in% colnames(vsn))
+  expr   <- vsn[, tbl$bio_id_merge]
+  design <- model.matrix(reformulate(coef_name), data = tbl)
+  limma::lmFit(expr, design = design) %>%
+    limma::eBayes() %>%
+    limma::topTable(coef = coef_name, n = Inf) %>%
+    as_tibble(rownames = "protein") %>%
+    mutate(rank = sign(logFC) * -log10(adj.P.Val)) %>%
+    arrange(desc(rank))
+}
+
+axis_inputs <- list(
+  immature_like  = list(diff_scores_wide, "Immature_like"),
+  committed_like = list(diff_scores_wide, "Committed_like"),
+  gmp_like       = list(diff_scores_wide, "GMP_like"),
+  dc1            = list(dplyr::select(cluster_mapping, bio_id_merge, DC1, DC2), "DC1"),
+  dc2            = list(dplyr::select(cluster_mapping, bio_id_merge, DC1, DC2), "DC2")
+)
+
+tt_list <- imap(axis_inputs, ~ fit_continuous_axis(.x[[1]], .x[[2]]))
+
+# The score-based and DC-based axes should agree (sanity check)
+print(left_join(tt_list$committed_like, tt_list$dc1, by = "protein") %>%
+        rstatix::cor_test(rank.x, rank.y, method = "spearman"))
+print(left_join(tt_list$gmp_like, tt_list$dc2, by = "protein") %>%
+        rstatix::cor_test(rank.x, rank.y, method = "spearman"))
+
+writexl::write_xlsx(tt_list,
+                    file.path(table_dir, "protein_differentiation_association.xlsx"))
+
+# =============================================================================
+# 9. Zeng et al. (Cancer Discov 2025) scHierarchy markers (optional)
+# =============================================================================
+# Independent differentiation-state marker sets projected onto the diffusion map
+# as an external cross-validation of the map geometry. Requires the supplementary
+# marker table; skipped with a message if it is not present.
+
+sch_path <- file.path(data_dir, "zeng_scHierarchy_markers.xlsx")
+if (file.exists(sch_path)) {
+  cat("Zeng scHierarchy marker projection...\n")
+  sch_markers <- as.list(readxl::read_excel(sch_path))
+  sch_gsva <- gsva(gsvaParam(exprData = vsn, geneSets = sch_markers, kcdf = "Gaussian"))
+  sch_long <- sch_gsva %>% as_tibble(rownames = "set") %>% pivot_longer(cols = -set)
+
+  p_sch <- dm_coords %>%
+    dplyr::select(bio_id_merge, DC1, DC2) %>%
+    left_join(sch_long, by = c("bio_id_merge" = "name")) %>%
+    ggplot(aes(DC1, DC2, col = value)) +
+    geom_point() +
+    facet_wrap(~ set) +
+    scale_color_gradient2(high = "#d5510aff", mid = "#f1faee", low = "#0b97baff",
+                          breaks = c(-3, 0, 2)) +
+    cowplot::theme_cowplot()
+  ggsave(file.path(fig_dir, "FigS1I_zeng_schierarchy_dm.pdf"), p_sch,
+         width = 9, height = 6)
+} else {
+  cat("Zeng scHierarchy markers not found; skipping projection.\n")
+}
+
+# =============================================================================
+# 10. Save intermediate objects
 # =============================================================================
 
 saveRDS(list(

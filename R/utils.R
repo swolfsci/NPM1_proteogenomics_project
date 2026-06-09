@@ -47,6 +47,42 @@ aggregate_differentiation_scores <- function(gsva_long) {
     pivot_wider(id_cols = bio_id_merge, names_from = signature_group, values_from = value)
 }
 
+# --- Genotype / phenotype association ----------------------------------------
+
+# Wilcoxon rank-sum test of each binary mutation against the continuous
+# differentiation scores, with BH correction across the gene x score family.
+# Used for the final Fig 2D panel (02_mutations.R) and the genetic-vs-non-genetic
+# decomposition (05_reviewer_analyses.R).
+test_genotype_differentiation <- function(diff_scores_wide, clinical, mutation_cols,
+                                          score_cols = c("Committed_like",
+                                                         "Immature_like", "GMP_like")) {
+  diff_scores_wide %>%
+    left_join(clinical, by = "bio_id_merge") %>%
+    dplyr::select(all_of(score_cols), any_of(mutation_cols)) %>%
+    pivot_longer(cols = any_of(mutation_cols),
+                 names_to = "gene", values_to = "mutation_status") %>%
+    pivot_longer(cols = all_of(score_cols),
+                 names_to = "name", values_to = "value") %>%
+    filter(!is.na(mutation_status)) %>%
+    group_by(gene, name) %>%
+    rstatix::wilcox_test(value ~ mutation_status) %>%
+    rstatix::adjust_pvalue(method = "BH") %>%
+    rstatix::add_significance()
+}
+
+# --- Bootstrap R^2 for variance decomposition --------------------------------
+
+# Row-resampling bootstrap of the R^2 of lm(outcome ~ .) on a data frame that
+# contains `outcome` plus a set of predictor columns. Returns the boot object.
+bootstrap_r2 <- function(data, outcome, R = 2000, seed = 42) {
+  set.seed(seed)
+  stat <- function(d, idx) {
+    f <- as.formula(paste(outcome, "~ ."))
+    summary(lm(f, data = d[idx, ]))$r.squared
+  }
+  boot::boot(data, statistic = stat, R = R)
+}
+
 # --- GSEA helpers (used in 03_mito_score.R) ----------------------------------
 
 run_limma_contrast <- function(expr, annot, group_col, contrast_str) {

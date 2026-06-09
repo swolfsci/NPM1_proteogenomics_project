@@ -283,6 +283,74 @@ ggcuminc(cir_fit, outcome = "Relapse") +
 dev.off()
 
 # =============================================================================
+# 9b. Genetic context of the high-mito phenotype (Reviewer 2)
+# =============================================================================
+# Are high-mito cases enriched for any recurrent mutation, overall and within
+# the FLT3-ITD-negative subset?
+
+cat("Mito-score vs mutation enrichment...\n")
+
+mutation_candidates <- intersect(
+  c("FLT3_ITD_PCR", "FLT3_TKD", "ras", "DNMT3A_R882", "PTPN11", "RAD21",
+    "SMC1A", "SMC3", "STAG2", "IDH1", "IDH2", "TET2", "WT1", "RUNX1",
+    "ASXL1", "MYC", "NF1", "SRSF2", "cohesin"),
+  colnames(clinical)
+)
+
+mito_mut <- cluster_mapping %>%
+  mutate(high_mito = mito_score_ssgsea >= q75) %>%
+  dplyr::select(bio_id_merge, high_mito, cluster) %>%
+  inner_join(clinical, by = "bio_id_merge")
+
+# genes with >= 3 mutated cases (Fisher on singletons is noise)
+gene_cols_test <- mutation_candidates[
+  map_lgl(mutation_candidates, ~ sum(mito_mut[[.x]] == 1, na.rm = TRUE) >= 3)
+]
+
+fisher_per_gene <- function(df) {
+  map_dfr(gene_cols_test, function(g) {
+    tab <- table(df[[g]], df$high_mito)
+    if (any(dim(tab) < 2)) return(NULL)
+    ft <- fisher.test(tab)
+    tibble(gene = g,
+           n_high   = sum(df[[g]] == 1 & df$high_mito, na.rm = TRUE),
+           n_low    = sum(df[[g]] == 1 & !df$high_mito, na.rm = TRUE),
+           frac_high = n_high / sum(df$high_mito, na.rm = TRUE),
+           frac_low  = n_low  / sum(!df$high_mito, na.rm = TRUE),
+           odds_ratio = unname(ft$estimate),
+           p_value = ft$p.value)
+  }) %>%
+    mutate(p_adj = p.adjust(p_value, method = "BH")) %>%
+    arrange(p_value)
+}
+
+if (length(gene_cols_test) > 0) {
+  mito_mut_full <- fisher_per_gene(mito_mut)
+  write_csv(mito_mut_full, file.path(table_dir, "mito_mutation_enrichment_full.csv"))
+
+  if ("FLT3_ITD_PCR" %in% colnames(mito_mut)) {
+    write_csv(fisher_per_gene(filter(mito_mut, FLT3_ITD_PCR == 0)),
+              file.path(table_dir, "mito_mutation_enrichment_flt3neg.csv"))
+  }
+
+  p_mito_mut <- mito_mut_full %>%
+    slice_min(p_value, n = 12) %>%
+    pivot_longer(c(frac_high, frac_low), names_to = "group", values_to = "fraction") %>%
+    mutate(group = recode(group, frac_high = "High Mito", frac_low = "Non-high Mito"),
+           gene  = fct_reorder(gene, fraction, .fun = max, .desc = TRUE)) %>%
+    ggplot(aes(gene, fraction, fill = group)) +
+    geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+    scale_fill_manual(values = c("High Mito" = "#B2182B", "Non-high Mito" = "grey60")) +
+    scale_y_continuous(labels = scales::percent) +
+    labs(x = NULL, y = "Fraction mutated", fill = NULL,
+         title = "Mutation frequencies by Mito-AML status") +
+    theme_minimal(base_size = 11) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  ggsave(file.path(fig_dir, "FigS3I_mito_mutation_enrichment.pdf"),
+         p_mito_mut, width = 9, height = 5)
+}
+
+# =============================================================================
 # 10. Figure 3E: Comparative GSEA — discordant group characterization
 # =============================================================================
 
