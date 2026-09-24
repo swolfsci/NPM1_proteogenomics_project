@@ -24,6 +24,7 @@ of the manuscript, plus the reference resources listed below):
 - Multivariable models adjusting for clinical covariates
 - Genetic-versus-non-genetic (mutation / FAB) variance decomposition
 - Mito-score and FLT3-TKD mutation-context analyses
+- Gemtuzumab ozogamicin effect on relapse by differentiation cluster
 
 To support readers adapting this pipeline to other cohorts, the repository includes
 `data/clinical_data.csv.example` — a schema file with column definitions and dummy
@@ -54,10 +55,11 @@ The `data/` directory should contain:
 The clinical/NGS table carries per-gene binary mutation columns (e.g.
 `FLT3_ITD_PCR`, `FLT3_TKD`, `DNMT3A_Hotspot`, `NRAS`/`KRAS`, `PTPN11`, `RAD21`,
 `SRSF2`, `MYC`, `NF1`, cohesin genes), the FAB classification (`fab`), and the
-survival endpoints (`efs_days`/`efsstat`, `os_days`/`stat`, `cuminc`). The FAB,
-FLT3-TKD and variance-decomposition analyses in scripts 02 and 03 are guarded on
-the presence of their columns/packages and skip with a message when those are
-absent (e.g. when running against `clinical_data.csv.example`).
+survival endpoints (`efs_days`/`efsstat`, `os_days`/`stat`, `cuminc`, and
+`rfs_days`, counted from the date of remission). The FAB, FLT3-TKD and
+variance-decomposition analyses in scripts 02 and 03, and script 05 as a whole,
+are guarded on the presence of their columns/packages and skip with a message
+when those are absent (e.g. when running against `clinical_data.csv.example`).
 
 Raw mass spectrometry data are deposited at PRIDE (accession: XXXX).
 
@@ -73,6 +75,7 @@ source("R/01_differentiation.R")     # Figures 1, S1
 source("R/02_mutations.R")           # Figures 2, S2 (requires clinical_data.csv)
 source("R/03_mito_score.R")          # Figures 3, S3 (survival analyses require clinical_data.csv)
 source("R/04_robustness.R")          # Table S2, robustness analyses
+source("R/05_go_relapse_by_cluster.R") # GO effect on relapse by cluster (requires clinical_data.csv)
 ```
 
 The analyses added during peer review (HemaSphere resubmission) are folded into the
@@ -86,7 +89,8 @@ Scripts read from `data/` and write to `output/figures/` and `output/tables/`.
 
 Each script sources `R/utils.R` for shared helper functions and explicitly loads its
 required data at the top. Scripts 01 and 03 save intermediate R objects to `output/`
-that downstream scripts read. Script 04 is self-contained.
+that downstream scripts read. Script 04 is self-contained. Script 05 reads the
+objects saved by 00 and 01.
 
 If `clinical_data.csv` is absent, scripts 02 and 03 fall back to `clinical_data.csv.example`
 and print a warning; figures that depend on outcome data will be generated with placeholder
