@@ -83,8 +83,10 @@ source("R/06_cluster_stability.R")   # Stability of the locked metaclusters (out
 The analyses added during peer review (HemaSphere resubmission) are folded into the
 scripts where they belong: the protein correlates of the differentiation axes and the
 Zeng *Cancer Discov* 2025 marker projection live in `01_differentiation.R`; the
-genetic-versus-non-genetic variance decomposition, FAB-morphology stack and FLT3-TKD
-analyses in `02_mutations.R`; and the mito-score mutation-context analysis in
+genetic-versus-non-genetic variance decomposition (variancePartition for Fig 2E,
+nested R^2 with bootstrap CIs for Fig S2G), the FAB-morphology analyses (Fig S2E-F,
+including the pairwise FAB x cluster Fisher tests) and FLT3-TKD analyses in
+`02_mutations.R`; and the mito-score mutation-context analysis in
 `03_mito_score.R`. `05_go_relapse_by_cluster.R` tests whether the GO effect on relapse
 varies by cluster, along the continuous scores and DC1/DC2 (linear and spline
 interactions, per-decile estimates), or with any single protein (protein x arm
@@ -100,7 +102,7 @@ objects saved by 00 and 01.
 If `clinical_data.csv` is absent, scripts 02 and 03 fall back to `clinical_data.csv.example`
 and print a warning; figures that depend on outcome data will be generated with placeholder
 results. The resubmission blocks use a few packages beyond the core stack — `rstatix`,
-`boot`, `forestmodel`, and (optionally) `variancePartition`, `coxphf` and `fgsea`; blocks whose packages or
+`boot`, `ggpubr`, `forestmodel`, and (optionally) `variancePartition`, `coxphf` and `fgsea`; blocks whose packages or
 input columns are missing are skipped with a message rather than erroring.
 
 ## Software

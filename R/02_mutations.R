@@ -238,7 +238,7 @@ if (length(sig_genes) >= 2 && requireNamespace("boot", quietly = TRUE)) {
     write_csv(file.path(table_dir, "variance_explained_by_mutations.csv"))
 }
 
-# --- Fig S2I: multivariable EFS forest for the GMP-like score ----------------
+# --- Fig S2L: multivariable EFS forest for the GMP-like score ----------------
 if (length(sig_genes) >= 1) {
   gmp_forest <- diff_scores_wide %>%
     left_join(clinical, by = "bio_id_merge") %>%
@@ -250,15 +250,16 @@ if (length(sig_genes) >= 1) {
     mutate(across(all_of(sig_genes), as.factor)) %>%
     coxph(Surv(efs_days, efsstat) ~ ., .) %>%
     forest_model()
-  ggsave(file.path(fig_dir, "FigS2I_gmp_forest.pdf"), gmp_forest, width = 5, height = 6)
+  ggsave(file.path(fig_dir, "FigS2L_gmp_forest.pdf"), gmp_forest, width = 5, height = 6)
 }
 
 # =============================================================================
-# 5c. FAB morphology vs proteomic landscape (Reviewer 1/2, Fig 2E / S2)
+# 5c. FAB morphology vs proteomic landscape (Fig 2E, Fig S2E-G)
 # =============================================================================
-# FAB class is compared with (i) the categorical clusters and (ii) the continuous
-# scores, and its variance contribution is benchmarked against recurrent
-# mutations by nested R^2 and (optionally) variancePartition. Skipped if the
+# FAB class is compared with (i) the categorical clusters (Fig S2E) and (ii) the
+# continuous scores (Fig S2F). The variance of DC1/DC2 is then partitioned
+# between FAB morphology and the recurrent mutations with variancePartition
+# (Fig 2E) and confirmed by nested linear models (Fig S2G). Skipped if the
 # clinical table carries no FAB column.
 
 fab_col <- intersect(c("FAB", "fab", "fab_klassifikation"), colnames(clinical))
@@ -286,9 +287,34 @@ if (length(fab_col) >= 1) {
     ) %>%
     filter(!is.na(FAB), !is.na(cluster))
 
-  # --- 5c-i. FAB vs cluster: Fisher + column-proportion heatmap ---------------
+  # --- 5c-i. FAB vs cluster (Fig S2E) ----------------------------------------
+  # Global Fisher test, standardized residuals, and pairwise 2x2 Fisher tests
+  # (one FAB class vs one cluster, BH-adjusted) for the odds ratios in the text.
   contingency_tab <- table(FAB = fab_df$FAB, Cluster = fab_df$cluster)
+  set.seed(42)
   fisher_global <- fisher.test(contingency_tab, simulate.p.value = TRUE, B = 1e5)
+
+  stdres_df <- as.data.frame.table(suppressWarnings(chisq.test(contingency_tab))$stdres) %>%
+    rename(stdres = Freq) %>%
+    mutate(obs = as.vector(contingency_tab),
+           direction = case_when(stdres >  1.96 ~ "enriched",
+                                 stdres < -1.96 ~ "depleted",
+                                 TRUE           ~ "ns"))
+  write_csv(stdres_df, file.path(table_dir, "fab_cluster_stdres.csv"))
+
+  # both logical levels are forced so table() stays 2x2 when a cell is empty
+  pairwise_fab_cluster <- expand_grid(FAB = levels(fab_df$FAB),
+                                      Cluster = levels(fab_df$cluster)) %>%
+    pmap_dfr(function(FAB, Cluster) {
+      tab <- table(factor(fab_df$FAB == FAB, levels = c(FALSE, TRUE)),
+                   factor(fab_df$cluster == Cluster, levels = c(FALSE, TRUE)))
+      ft <- fisher.test(tab)
+      tibble(FAB = FAB, Cluster = Cluster, n = tab["TRUE", "TRUE"],
+             odds_ratio = unname(ft$estimate), ci_low = ft$conf.int[1],
+             ci_high = ft$conf.int[2], p_value = ft$p.value)
+    }) %>%
+    mutate(p_adj = p.adjust(p_value, method = "BH"))
+  write_csv(pairwise_fab_cluster, file.path(table_dir, "fab_cluster_pairwise_fisher.csv"))
 
   prop_df <- as.data.frame.table(contingency_tab) %>%
     rename(FAB = FAB, Cluster = Cluster, n = Freq) %>%
@@ -312,10 +338,12 @@ if (length(fab_col) >= 1) {
     theme_minimal(base_size = 11) +
     theme(panel.grid = element_blank(),
           axis.text.x = element_text(angle = 30, hjust = 1))
-  ggsave(file.path(fig_dir, "FigS2_fab_cluster_proportions.pdf"),
+  ggsave(file.path(fig_dir, "FigS2E_fab_cluster_proportions.pdf"),
          p_prop, width = 5.5, height = 4.5)
 
-  # --- 5c-ii. FAB vs continuous scores: Kruskal-Wallis + gated Dunn -----------
+  # --- 5c-ii. FAB vs continuous scores (Fig S2F) ------------------------------
+  # Kruskal-Wallis (BH across the three scores) with epsilon^2; Dunn post-hoc
+  # (BH within score) only for scores with a significant omnibus test.
   score_vars   <- c("Immature_like", "GMP_like", "Committed_like")
   score_labels <- c(Immature_like = "Immature-Score", GMP_like = "GMP-Score",
                     Committed_like = "Committed-Score")
@@ -323,7 +351,8 @@ if (length(fab_col) >= 1) {
   kw_results <- map_dfr(score_vars, function(sv) {
     res <- kruskal.test(reformulate("FAB", sv), data = fab_df)
     tibble(score = sv, statistic = unname(res$statistic),
-           df = unname(res$parameter), p_value = res$p.value)
+           df = unname(res$parameter), p_value = res$p.value,
+           epsilon_sq = kruskal_effsize(fab_df, reformulate("FAB", sv))$effsize)
   }) %>% mutate(p_adj = p.adjust(p_value, method = "BH"))
   write_csv(kw_results, file.path(table_dir, "fab_kruskal_wallis.csv"))
 
@@ -337,11 +366,12 @@ if (length(fab_col) >= 1) {
   if (nrow(dunn_results) > 0)
     write_csv(dunn_results, file.path(table_dir, "fab_dunn_posthoc.csv"))
 
-  p_fab_scores <- fab_df %>%
+  fab_long <- fab_df %>%
     dplyr::select(FAB, all_of(score_vars)) %>%
     pivot_longer(all_of(score_vars), names_to = "score", values_to = "value") %>%
-    mutate(score = factor(score, levels = score_vars, labels = score_labels)) %>%
-    ggplot(aes(FAB, value, fill = FAB)) +
+    mutate(score = factor(score, levels = score_vars, labels = score_labels))
+
+  p_fab_scores <- ggplot(fab_long, aes(FAB, value, fill = FAB)) +
     geom_boxplot(outlier.size = 0.6, alpha = 0.85, linewidth = 0.3) +
     facet_wrap(~ score, nrow = 1, scales = "free_y") +
     scale_fill_brewer(palette = "Paired", guide = "none") +
@@ -353,10 +383,25 @@ if (length(fab_col) >= 1) {
     theme_bw(base_size = 11) +
     theme(strip.background = element_rect(fill = "grey95", color = NA),
           panel.grid.minor = element_blank())
-  ggsave(file.path(fig_dir, "FigS2_fab_continuous_scores.pdf"),
+
+  # brackets for significant Dunn comparisons, stacked above each facet's max
+  if (nrow(dunn_results) > 0) {
+    dunn_sig <- dunn_results %>%
+      filter(p.adj < 0.05) %>%
+      mutate(score = factor(score, levels = score_vars, labels = score_labels)) %>%
+      group_by(score) %>%
+      mutate(y.position = max(fab_long$value[fab_long$score == score[1]]) +
+               0.15 * row_number()) %>%
+      ungroup()
+    if (nrow(dunn_sig) > 0)
+      p_fab_scores <- p_fab_scores +
+        ggpubr::stat_pvalue_manual(dunn_sig, label = "p.adj.signif", tip.length = 0.01,
+                                   size = 3, inherit.aes = FALSE)
+  }
+  ggsave(file.path(fig_dir, "FigS2F_fab_continuous_scores.pdf"),
          p_fab_scores, width = 8, height = 4.5)
 
-  # --- 5c-iii. Nested R^2: morphology (FAB) vs genetics (Fig 2E) --------------
+  # --- 5c-iii. Morphology vs genetics: shared model data ----------------------
   gene_predictors <- intersect(
     c("DNMT3A_R882", "FLT3_ITD_PCR", "FLT3_TKD", "MYC", "NF1",
       "PTPN11", "RAD21", "SRSF2", "STAG2"),
@@ -365,10 +410,8 @@ if (length(fab_col) >= 1) {
 
   df_complete <- NULL
   keep_gene   <- character(0)
-  if (length(gene_predictors) >= 1 && requireNamespace("boot", quietly = TRUE)) {
+  if (length(gene_predictors) >= 1) {
     df_complete <- fab_df %>%
-      left_join(dplyr::select(clinical, bio_id_merge, all_of(gene_predictors)),
-                by = "bio_id_merge") %>%
       dplyr::select(FAB, DC1, DC2, all_of(gene_predictors)) %>%
       drop_na() %>%
       mutate(across(all_of(gene_predictors), ~ droplevels(factor(.x))),
@@ -380,106 +423,108 @@ if (length(fab_col) >= 1) {
     })]
   }
 
-  if (length(keep_gene) > 0) {
-    fit_models <- function(dc) {
-      list(
-        fab   = lm(reformulate("FAB", dc), df_complete),
-        genes = lm(reformulate(keep_gene, dc), df_complete),
-        full  = lm(reformulate(c("FAB", keep_gene), dc), df_complete)
-      )
-    }
-    r2 <- function(m) summary(m)$r.squared
+  var_colors <- c("Morphology" = "#3B6E8F", "Genetics" = "#C5742E",
+                  "Unattributed" = "grey75")
 
+  variance_bar <- function(d, title, subtitle) {
+    ggplot(d, aes(value, fct_relevel(component, c("DC2", "DC1")),
+                  fill = factor(group, levels = names(var_colors)))) +
+      geom_col(width = 0.55, color = "white", linewidth = 0.4) +
+      geom_text(aes(label = sprintf("%.1f%%", 100 * value)),
+                position = position_stack(vjust = 0.5),
+                color = "white", fontface = "bold", size = 4) +
+      scale_fill_manual(values = var_colors, name = NULL) +
+      scale_x_continuous(labels = scales::percent_format(accuracy = 1),
+                         expand = expansion(mult = c(0, 0.02))) +
+      labs(x = "Fraction of variance", y = NULL, title = title, subtitle = subtitle) +
+      cowplot::theme_cowplot() +
+      theme(panel.grid.major.y = element_blank(), panel.grid.minor = element_blank(),
+            legend.position = "top")
+  }
+
+  # --- 5c-iv. variancePartition (Fig 2E) --------------------------------------
+  # Linear mixed model per component with FAB and each mutation as random
+  # effects; mutation terms are summed into a genetic component.
+  if (length(keep_gene) > 0 && requireNamespace("variancePartition", quietly = TRUE)) {
+    vp_predictors <- c("FAB", keep_gene)
+    y_mat <- t(as.matrix(df_complete[, c("DC1", "DC2")]))
+    vp_form <- as.formula(paste("~", paste0("(1|", vp_predictors, ")", collapse = " + ")))
+    vp_fit <- tryCatch(
+      variancePartition::fitExtractVarPartModel(y_mat, vp_form,
+                                                dplyr::select(df_complete, all_of(vp_predictors))),
+      error = function(e) { message("  variancePartition failed: ", e$message); NULL })
+
+    if (!is.null(vp_fit)) {
+      vp_df <- as.data.frame(vp_fit) %>%
+        rownames_to_column("component") %>%
+        pivot_longer(-component, names_to = "predictor", values_to = "value") %>%
+        mutate(group = case_when(predictor == "FAB" ~ "Morphology",
+                                 predictor == "Residuals" ~ "Unattributed",
+                                 TRUE ~ "Genetics"))
+      write_csv(vp_df, file.path(table_dir, "fab_genes_variancepartition_per_predictor.csv"))
+
+      vp_grouped <- vp_df %>%
+        group_by(component, group) %>%
+        summarise(value = sum(value), .groups = "drop")
+      write_csv(vp_grouped, file.path(table_dir, "fab_genes_variancepartition.csv"))
+
+      p_vp <- variance_bar(vp_grouped,
+                           "Variance of DC1/DC2: morphology vs genetics",
+                           sprintf("variancePartition (LMM; FAB + %d mutations as random effects); n = %d",
+                                   length(keep_gene), nrow(df_complete)))
+      ggsave(file.path(fig_dir, "Fig2E_variancepartition.pdf"), p_vp, width = 6, height = 3.5)
+    }
+  } else if (length(keep_gene) > 0) {
+    message("variancePartition not installed; skipping Fig 2E.")
+  }
+
+  # --- 5c-v. Nested R^2 confirmation (Fig S2G) --------------------------------
+  # DC ~ FAB, DC ~ mutations, DC ~ FAB + mutations. Forward decomposition (FAB,
+  # + mutations, unattributed) for the figure; the reverse increment (FAB given
+  # mutations) and nested F-tests check each block's unique contribution.
+  # 95% percentile CIs from 2,000 bootstrap resamples.
+  if (length(keep_gene) > 0 && requireNamespace("boot", quietly = TRUE)) {
+    nested_r2 <- function(d, dc) {
+      r2 <- function(rhs) summary(lm(reformulate(rhs, dc), d))$r.squared
+      fab <- r2("FAB"); genes <- r2(keep_gene); full <- r2(c("FAB", keep_gene))
+      c(R2_FAB = fab, R2_genes = genes, R2_full = full,
+        delta_genes_given_FAB = full - fab, delta_FAB_given_genes = full - genes,
+        unattributed = 1 - full)
+    }
+
+    set.seed(42)
     r2_estimates <- map_dfr(c("DC1", "DC2"), function(dc) {
-      f <- fit_models(dc)
-      tibble(component = dc,
-             R2_FAB   = r2(f$fab),
-             R2_genes = r2(f$genes),
-             R2_full  = r2(f$full),
-             delta_genes_given_FAB = r2(f$full) - r2(f$fab),
-             unattributed = 1 - r2(f$full))
+      bt <- boot::boot(df_complete, function(d, i) nested_r2(d[i, ], dc), R = 2000)
+      map_dfr(seq_along(bt$t0), function(k) {
+        ci <- boot::boot.ci(bt, type = "perc", index = k)$percent
+        tibble(component = dc, quantity = names(bt$t0)[k], estimate = bt$t0[k],
+               ci_low = ci[4], ci_high = ci[5])
+      })
     })
     write_csv(r2_estimates, file.path(table_dir, "fab_genes_nested_r2.csv"))
 
+    nested_ftests <- map_dfr(c("DC1", "DC2"), function(dc) {
+      m <- function(rhs) lm(reformulate(rhs, dc), df_complete)
+      m_fab <- m("FAB"); m_genes <- m(keep_gene); m_full <- m(c("FAB", keep_gene))
+      tibble(component = dc,
+             p_FAB_vs_null     = anova(m("1"), m_fab)[["Pr(>F)"]][2],
+             p_genes_given_FAB = anova(m_fab, m_full)[["Pr(>F)"]][2],
+             p_FAB_given_genes = anova(m_genes, m_full)[["Pr(>F)"]][2])
+    })
+    write_csv(nested_ftests, file.path(table_dir, "fab_genes_nested_r2_ftests.csv"))
+
     decomp_df <- r2_estimates %>%
-      dplyr::select(component, R2_FAB, delta_genes_given_FAB, unattributed) %>%
-      pivot_longer(-component, names_to = "segment", values_to = "value") %>%
-      mutate(
-        segment = dplyr::recode(segment,
-                                R2_FAB = "FAB",
-                                delta_genes_given_FAB = "+ Mutations",
-                                unattributed = "Unattributed"),
-        segment = factor(segment, levels = c("FAB", "+ Mutations", "Unattributed")),
-        pct_label = sprintf("%.1f%%", 100 * value)
-      )
+      filter(quantity %in% c("R2_FAB", "delta_genes_given_FAB", "unattributed")) %>%
+      transmute(component, value = estimate,
+                group = dplyr::recode(quantity, R2_FAB = "Morphology",
+                                      delta_genes_given_FAB = "Genetics",
+                                      unattributed = "Unattributed"))
 
-    p_decomp <- ggplot(decomp_df,
-                       aes(value, fct_relevel(component, c("DC2", "DC1")), fill = segment)) +
-      geom_col(width = 0.55, color = "white", linewidth = 0.4) +
-      geom_text(aes(label = pct_label), position = position_stack(vjust = 0.5),
-                color = "white", fontface = "bold", size = 4) +
-      scale_fill_manual(values = c("FAB" = "#3B6E8F", "+ Mutations" = "#C5742E",
-                                   "Unattributed" = "grey75"), name = NULL) +
-      scale_x_continuous(labels = scales::percent_format(accuracy = 1),
-                         expand = expansion(mult = c(0, 0.02))) +
-      labs(x = "Fraction of variance", y = NULL,
-           title = "Proteomic variance attributable to morphology and genetics",
-           subtitle = sprintf("Nested R^2: lm(DC ~ FAB) vs lm(DC ~ FAB + %d mutations); n = %d",
-                              length(keep_gene), nrow(df_complete))) +
-      theme_bw(base_size = 11) +
-      theme(panel.grid.major.y = element_blank(), panel.grid.minor = element_blank(),
-            legend.position = "top")
-    ggsave(file.path(fig_dir, "Fig2E_variance_decomposition.pdf"),
-           p_decomp, width = 6, height = 3.5)
-
-    # --- 5c-iv. variancePartition confirmation (optional) ---------------------
-    if (requireNamespace("variancePartition", quietly = TRUE)) {
-      vp_predictors <- c("FAB", keep_gene)
-      vp_data <- df_complete %>% dplyr::select(DC1, DC2, all_of(vp_predictors)) %>% drop_na()
-      y_mat   <- t(as.matrix(vp_data[, c("DC1", "DC2")]))
-      rownames(y_mat) <- c("DC1", "DC2")
-      vp_form <- as.formula(paste("~", paste0("(1|", vp_predictors, ")", collapse = " + ")))
-      vp_fit  <- tryCatch(
-        variancePartition::fitExtractVarPartModel(y_mat, vp_form,
-                                                  dplyr::select(vp_data, all_of(vp_predictors))),
-        error = function(e) { message("  variancePartition failed: ", e$message); NULL })
-
-      if (!is.null(vp_fit)) {
-        vp_grouped <- as.data.frame(vp_fit) %>%
-          rownames_to_column("component") %>%
-          pivot_longer(-component, names_to = "predictor", values_to = "var_frac") %>%
-          mutate(group = case_when(predictor == "FAB" ~ "Morphology",
-                                   predictor == "Residuals" ~ "Unattributed",
-                                   TRUE ~ "Genetics")) %>%
-          group_by(component, group) %>%
-          summarise(var_frac = sum(var_frac), .groups = "drop") %>%
-          group_by(component) %>%
-          mutate(pct_label = sprintf("%.1f%%", 100 * var_frac)) %>%
-          ungroup()
-        write_csv(vp_grouped, file.path(table_dir, "fab_genes_variancepartition.csv"))
-
-        p_vp <- ggplot(vp_grouped,
-                       aes(var_frac, fct_relevel(component, c("DC2", "DC1")),
-                           fill = factor(group, levels = c("Morphology", "Genetics", "Unattributed")))) +
-          geom_col(width = 0.55, color = "white", linewidth = 0.4) +
-          geom_text(aes(label = pct_label), position = position_stack(vjust = 0.5),
-                    color = "white", fontface = "bold", size = 4) +
-          scale_fill_manual(values = c("Morphology" = "#3B6E8F", "Genetics" = "#C5742E",
-                                       "Unattributed" = "grey75"), name = NULL) +
-          scale_x_continuous(labels = scales::percent_format(accuracy = 1),
-                             expand = expansion(mult = c(0, 0.02))) +
-          labs(x = "Fraction of variance", y = NULL,
-               title = "variancePartition: morphology vs genetics (confirmation)",
-               subtitle = sprintf("LMM-based variance decomposition; n = %d", nrow(vp_data))) +
-          cowplot::theme_cowplot() +
-          theme(panel.grid.major.y = element_blank(), panel.grid.minor = element_blank(),
-                legend.position = "top")
-        ggsave(file.path(fig_dir, "FigS2_variancepartition.pdf"),
-               p_vp, width = 6, height = 3.5)
-      }
-    } else {
-      message("variancePartition not installed; skipping confirmatory panel.")
-    }
+    p_decomp <- variance_bar(decomp_df,
+                             "Nested R^2: morphology first, then mutations",
+                             sprintf("lm(DC ~ FAB) vs lm(DC ~ FAB + %d mutations); n = %d",
+                                     length(keep_gene), nrow(df_complete)))
+    ggsave(file.path(fig_dir, "FigS2G_nested_r2.pdf"), p_decomp, width = 6, height = 3.5)
   }
 }
 
@@ -570,14 +615,14 @@ if ("FLT3_TKD" %in% colnames(clinical)) {
 }
 
 # =============================================================================
-# 6. Survival by clinical features (Fig S2E-H)
+# 6. Survival by clinical features (Fig S2H-K)
 # =============================================================================
 
 surv_df <- cluster_mapping %>%
   dplyr::select(bio_id_merge, cluster) %>%
   left_join(clinical, by = "bio_id_merge")
 
-# --- Fig S2E: BCL2 and HOX/Menin expression by cluster ---
+# --- BCL2 and HOX/Menin expression by cluster (not in the current figure set) ---
 bcl2_score <- as_tibble(vsn["BCL2", , drop = FALSE] %>% t(), rownames = "bio_id_merge") %>%
   dplyr::rename(BCL2_exp = BCL2)
 
@@ -610,31 +655,31 @@ p_bcl2_menin <- bcl2_menin_long %>%
   labs(x = "", y = "Score") +
   ggpubr::stat_pvalue_manual(dunn_results)
 
-ggsave(file.path(fig_dir, "FigS2E_bcl2_menin.pdf"), p_bcl2_menin,
+ggsave(file.path(fig_dir, "FigS2_bcl2_menin.pdf"), p_bcl2_menin,
        width = 6, height = 4, dpi = 300)
 
-# --- Fig S2F: EFS by FLT3-ITD ---
-pdf(file.path(fig_dir, "FigS2F_efs_flt3.pdf"), width = 5, height = 4.5)
+# --- Fig S2H: EFS by FLT3-ITD ---
+pdf(file.path(fig_dir, "FigS2H_efs_flt3.pdf"), width = 5, height = 4.5)
 ggsurvplot(survfit(Surv(efs_days, efsstat) ~ FLT3_ITD_PCR, surv_df),
            surv_df, pval = TRUE, risk.table = TRUE,
            palette = c("#219ebc", "#e63946"))
 dev.off()
 
-# --- Fig S2G: EFS by cohesin ---
-pdf(file.path(fig_dir, "FigS2G_efs_cohesin.pdf"), width = 5, height = 4.5)
+# --- Fig S2I: EFS by cohesin ---
+pdf(file.path(fig_dir, "FigS2I_efs_cohesin.pdf"), width = 5, height = 4.5)
 ggsurvplot(survfit(Surv(efs_days, efsstat) ~ cohesin, surv_df),
            surv_df, pval = TRUE, risk.table = TRUE,
            palette = c("#219ebc", "#e63946"))
 dev.off()
 
-# --- Fig S2H: EFS by ELN risk and triple-hit ---
-pdf(file.path(fig_dir, "FigS2H_efs_eln.pdf"), width = 5, height = 4.5)
+# --- Fig S2J-K: EFS by ELN risk and triple-hit ---
+pdf(file.path(fig_dir, "FigS2J_efs_eln.pdf"), width = 5, height = 4.5)
 ggsurvplot(survfit(Surv(efs_days, efsstat) ~ ELN2022_risk, surv_df),
            surv_df, pval = TRUE, risk.table = TRUE,
            palette = c("#ffb703", "#219ebc", "#e63946"))
 dev.off()
 
-pdf(file.path(fig_dir, "FigS2H_efs_triple.pdf"), width = 5, height = 4.5)
+pdf(file.path(fig_dir, "FigS2K_efs_triple.pdf"), width = 5, height = 4.5)
 surv_df %>%
   mutate(triple_status = case_when(
     FLT3_ITD_PCR == 1 & DNMT3A_R882 == 1 ~ "triple_hit",
