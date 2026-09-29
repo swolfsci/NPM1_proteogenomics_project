@@ -115,13 +115,27 @@ set_sizes <- rowSums(binary_matrix_aligned)
 binary_matrix_clean <- binary_matrix_aligned[set_sizes > 1, ]
 pcgse_result <- PCGSE::pcgse(data = data_input, gene.sets = binary_matrix_clean, pc.indexes = 1:2)
 
-# --- Fig S1B: PCGSE heatmap ---
+# --- Fig S1B: PCA colored by the aggregated differentiation scores ---
+p_pca_diff <- pca_scores %>%
+  dplyr::select(bio_id_merge, PC1, PC2) %>%
+  left_join(diff_scores_long, by = "bio_id_merge") %>%
+  ggplot(aes(PC1, PC2, col = score)) +
+  geom_point(size = 2) +
+  facet_wrap(~ differentiation) +
+  cowplot::theme_cowplot() +
+  scico::scale_color_scico(palette = "vik", midpoint = 0, limits = c(-3, 3),
+                           oob = scales::squish)
+
+ggsave(file.path(fig_dir, "FigS1B_pca_differentiation_scores.pdf"), p_pca_diff,
+       width = 7, height = 2.5)
+
+# --- PCGSE heatmap (not in the current figure set) ---
 pcgse_stats <- pcgse_result$statistics %>%
   as_tibble(rownames = "signature") %>%
   dplyr::rename(PC1 = V1, PC2 = V2) %>%
   mutate(across(c(PC1, PC2), ~ . * -1))
 
-pdf(file.path(fig_dir, "FigS1B_pcgse_heatmap.pdf"), width = 4.5, height = 4.5)
+pdf(file.path(fig_dir, "FigS1_pcgse_heatmap.pdf"), width = 4.5, height = 4.5)
 pcgse_stats %>%
   column_to_rownames("signature") %>%
   as.matrix() %>%
@@ -205,6 +219,25 @@ p_dm_gsva <- dm_coords %>%
 
 ggsave(file.path(fig_dir, "FigS1E_dm_gsva_signatures.pdf"), p_dm_gsva,
        width = 20, height = 3, dpi = 300)
+
+# --- Fig S1F: Diffusion maps colored by lineage marker proteins ---
+marker_proteins <- c("AZU1", "ELANE", "CD14", "LYZ", "S100A9", "HOXA9", "MEIS1", "BCL2")
+
+p_dm_markers <- vsn[intersect(marker_proteins, rownames(vsn)), ] %>%
+  t() %>%
+  scale() %>%
+  as_tibble(rownames = "bio_id_merge") %>%
+  pivot_longer(cols = -bio_id_merge, names_to = "protein", values_to = "z") %>%
+  left_join(dplyr::select(cluster_mapping, bio_id_merge, DC1, DC2), by = "bio_id_merge") %>%
+  ggplot(aes(DC1, DC2, col = z)) +
+  geom_point(size = 2) +
+  facet_wrap(~ protein, nrow = 1) +
+  cowplot::theme_cowplot() +
+  scico::scale_color_scico(palette = "vik", midpoint = 0, limits = c(-3, 3),
+                           oob = scales::squish)
+
+ggsave(file.path(fig_dir, "FigS1F_dm_marker_proteins.pdf"), p_dm_markers,
+       width = 25, height = 4)
 
 # --- Fig 1C: Diffusion maps colored by aggregated differentiation scores ---
 p_dm_diff <- dm_coords %>%
@@ -418,7 +451,7 @@ if (file.exists(sch_path)) {
     scale_color_gradient2(high = "#d5510aff", mid = "#f1faee", low = "#0b97baff",
                           breaks = c(-3, 0, 2)) +
     cowplot::theme_cowplot()
-  ggsave(file.path(fig_dir, "FigS1I_zeng_schierarchy_dm.pdf"), p_sch,
+  ggsave(file.path(fig_dir, "FigS1_zeng_schierarchy_dm.pdf"), p_sch,
          width = 9, height = 6)
 } else {
   cat("Zeng scHierarchy markers not found; skipping projection.\n")
